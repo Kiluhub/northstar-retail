@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-
+import { prisma } from "../../../lib/prisma";
 export async function GET() {
   try {
     const inventory = await prisma.inventory.findMany({
@@ -19,7 +18,7 @@ export async function GET() {
 
     return NextResponse.json(
       { error: "Failed to fetch inventory" },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }
