@@ -6,37 +6,14 @@ datasource db {
   provider = "postgresql"
 }
 
-enum InventoryEventType {
-  STOCK_RECEIVED
-  STOCK_PICKED
-  STOCK_SHIPPED
-  STOCK_RESERVED
-  STOCK_RELEASED
-  STOCK_ADJUSTED
-  STOCK_DAMAGED
-}
-
-enum SyncStatus {
-  PENDING
-  PROCESSING
-  SYNCED
-  FAILED
-}
-
-enum SyncMode {
-  POLLING
-  WEBHOOK
-}
-
 model Warehouse {
-  id        String   @id @default(cuid())
-  code      String   @unique
-  name      String
-  location  String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
+  id              String           @id @default(cuid())
+  code            String           @unique
+  name            String
+  location        String?
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
   inventory       Inventory[]
   inventoryEvents InventoryEvent[]
 
@@ -44,32 +21,30 @@ model Warehouse {
 }
 
 model Product {
-  id        String   @id @default(cuid())
-  sku       String   @unique
-  name      String
-  barcode   String?  @unique
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
+  id              String           @id @default(cuid())
+  sku             String           @unique
+  name            String
+  barcode         String?          @unique
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
   inventory       Inventory[]
-  inventoryEvents InventoryEvent[]
   inventoryCaches InventoryCache[]
+  inventoryEvents InventoryEvent[]
 
   @@map("products")
 }
 
 model Inventory {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   warehouseId      String
   productId        String
-  physicalQuantity Int      @default(0)
-  reservedQuantity Int      @default(0)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
-  product   Product   @relation(fields: [productId], references: [id])
+  physicalQuantity Int       @default(0)
+  reservedQuantity Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  product          Product   @relation(fields: [productId], references: [id])
+  warehouse        Warehouse @relation(fields: [warehouseId], references: [id])
 
   @@unique([warehouseId, productId])
   @@index([productId])
@@ -90,9 +65,8 @@ model InventoryEvent {
   occurredAt    DateTime
   createdAt     DateTime           @default(now())
   syncStatus    SyncStatus         @default(PENDING)
-
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
-  product   Product   @relation(fields: [productId], references: [id])
+  product       Product            @relation(fields: [productId], references: [id])
+  warehouse     Warehouse          @relation(fields: [warehouseId], references: [id])
 
   @@index([productId, occurredAt])
   @@index([warehouseId, occurredAt])
@@ -135,11 +109,32 @@ model InventoryCache {
   lastUpdatedAt     DateTime
   updatedAt         DateTime @updatedAt
   createdAt         DateTime @default(now())
-
-  product Product @relation(fields: [productId], references: [id])
+  product           Product  @relation(fields: [productId], references: [id])
 
   @@unique([productId, warehouseId])
   @@index([productId])
   @@index([warehouseId])
   @@map("inventory_cache")
+}
+
+enum InventoryEventType {
+  STOCK_RECEIVED
+  STOCK_PICKED
+  STOCK_SHIPPED
+  STOCK_RESERVED
+  STOCK_RELEASED
+  STOCK_ADJUSTED
+  STOCK_DAMAGED
+}
+
+enum SyncStatus {
+  PENDING
+  PROCESSING
+  SYNCED
+  FAILED
+}
+
+enum SyncMode {
+  POLLING
+  WEBHOOK
 }

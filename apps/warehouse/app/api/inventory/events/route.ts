@@ -1,13 +1,8 @@
-
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 
 import { prisma } from "@/lib/prisma";
-import {
-  getRabbitChannel,
-  INVENTORY_EXCHANGE,
-  INVENTORY_ROUTING_KEY,
-} from "@/lib/rabbitmq";
+import { publishInventoryEvent } from "@/lib/rabbitmq";
 
 const EVENT_TYPES = {
   receive: "STOCK_RECEIVED",
@@ -29,7 +24,10 @@ export async function POST(request: Request) {
       reason,
     } = body;
 
-    // Basic validation
+    // ---------------------------------------------------------
+    // 1. Validate the data received from the warehouse UI
+    // ---------------------------------------------------------
+
     if (
       !warehouseId ||
       !productId ||
@@ -37,25 +35,35 @@ export async function POST(request: Request) {
       typeof quantityDelta !== "number"
     ) {
       return NextResponse.json(
-        { error: "Missing or invalid inventory event data." },
+        {
+          error: "Missing or invalid inventory event data.",
+        },
         { status: 400 }
       );
     }
 
     if (!(operation in EVENT_TYPES)) {
       return NextResponse.json(
-        { error: "Unsupported inventory operation." },
+        {
+          error: "Unsupported inventory operation.",
+        },
         { status: 400 }
       );
     }
 
-    // Find the actual warehouse and product.
-    // The UI currently sends their codes/SKUs.
+    // ---------------------------------------------------------
+    // 2. Find the warehouse using the code sent by the UI
+    // ---------------------------------------------------------
+
     const warehouse = await prisma.warehouse.findUnique({
       where: {
         code: warehouseId,
       },
     });
+
+    // ---------------------------------------------------------
+    // 3. Find the product using its SKU
+    // ---------------------------------------------------------
 
     const product = await prisma.product.findUnique({
       where: {
@@ -65,12 +73,17 @@ export async function POST(request: Request) {
 
     if (!warehouse || !product) {
       return NextResponse.json(
-        { error: "Warehouse or product not found." },
+        {
+          error: "Warehouse or product not found.",
+        },
         { status: 404 }
       );
     }
 
-    // Make sure the inventory record exists.
+    // ---------------------------------------------------------
+    // 4. Make sure the inventory record exists
+    // ---------------------------------------------------------
+
     const inventory = await prisma.inventory.findUnique({
       where: {
         warehouseId_productId: {
@@ -82,12 +95,18 @@ export async function POST(request: Request) {
 
     if (!inventory) {
       return NextResponse.json(
-        { error: "Inventory record not found." },
+        {
+          error: "Inventory record not found.",
+        },
         { status: 404 }
       );
     }
 
-    // Prevent stock from becoming negative.
+    // ---------------------------------------------------------
+    // 5. Check that the operation would not create
+    //    negative physical stock
+    // ---------------------------------------------------------
+
     const newQuantity =
       inventory.physicalQuantity + quantityDelta;
 
@@ -100,50 +119,76 @@ export async function POST(request: Request) {
       );
     }
 
+    // ---------------------------------------------------------
+    // 6. Create a unique ID for this inventory event
+    // ---------------------------------------------------------
+
     const eventId = randomUUID();
 
-    // First record the event in PostgreSQL.
+    // ---------------------------------------------------------
+    // 7. Store the event in PostgreSQL first
+    //
+    //    It starts as PENDING because the worker has not
+    //    processed it yet.
+    // ---------------------------------------------------------
+
     const event = await prisma.inventoryEvent.create({
       data: {
         eventId,
+
         type: EVENT_TYPES[
           operation as keyof typeof EVENT_TYPES
         ],
+
         warehouseId: warehouse.id,
         productId: product.id,
+
         quantityDelta,
+
         reference: reference || null,
         reason: reason || null,
+
         source: "warehouse-ui",
+
         occurredAt: new Date(),
+
         syncStatus: "PENDING",
       },
     });
 
-    // Publish the event to RabbitMQ.
-    const channel = await getRabbitChannel();
+    // ---------------------------------------------------------
+    // 8. Publish the event to RabbitMQ
+    //
+    //    publishInventoryEvent() waits for RabbitMQ to confirm
+    //    that it accepted the message.
+    //
+    //    The inventory worker will consume this event and
+    //    update the actual inventory record.
+    // ---------------------------------------------------------
 
-    channel.publish(
-      INVENTORY_EXCHANGE,
-      INVENTORY_ROUTING_KEY,
-      Buffer.from(
-        JSON.stringify({
-          eventId: event.eventId,
-          type: event.type,
-          warehouseId: event.warehouseId,
-          productId: event.productId,
-          quantityDelta: event.quantityDelta,
-          reference: event.reference,
-          reason: event.reason,
-          source: event.source,
-          occurredAt: event.occurredAt,
-        })
-      ),
-      {
-        persistent: true,
-        contentType: "application/json",
-      }
-    );
+    await publishInventoryEvent({
+      eventId: event.eventId,
+      type: event.type,
+
+      warehouseId: event.warehouseId,
+      productId: event.productId,
+
+      quantityDelta: event.quantityDelta,
+
+      reference: event.reference,
+      reason: event.reason,
+
+      source: event.source,
+
+      occurredAt: event.occurredAt,
+    });
+
+    // ---------------------------------------------------------
+    // 9. Return success to the warehouse UI
+    //
+    //    The event is still PENDING here because the worker
+    //    has not necessarily processed it yet.
+    // ---------------------------------------------------------
 
     return NextResponse.json(
       {
@@ -154,7 +199,14 @@ export async function POST(request: Request) {
       { status: 201 }
     );
   } catch (error) {
-    console.error("Inventory event error:", error);
+    // ---------------------------------------------------------
+    // Any unexpected error is logged here.
+    // ---------------------------------------------------------
+
+    console.error(
+      "Inventory event error:",
+      error
+    );
 
     return NextResponse.json(
       {
