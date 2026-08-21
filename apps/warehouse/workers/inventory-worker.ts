@@ -1,7 +1,8 @@
+import http from "http";
 import dotenv from "dotenv";
 
 // The worker runs outside Next.js, so Next.js does not automatically
-// load .env.local for us.
+// load .env.local for us locally.
 dotenv.config({ path: ".env.local" });
 
 import { prisma } from "../lib/prisma";
@@ -33,7 +34,6 @@ async function startWorker() {
   );
 
   // Only allow up to 10 unacknowledged messages at a time.
-  // This prevents the worker from taking an unlimited number of events.
   await channel.prefetch(10);
 
   channel.consume(INVENTORY_QUEUE, async (message) => {
@@ -52,8 +52,7 @@ async function startWorker() {
        * IDEMPOTENCY
        *
        * RabbitMQ may redeliver a message.
-       * We therefore check whether this event has already been
-       * successfully processed before changing inventory.
+       * Check whether this event has already been processed.
        */
       const alreadyProcessed =
         await prisma.processedEvent.findUnique({
@@ -67,7 +66,6 @@ async function startWorker() {
           `Event ${event.eventId} already processed — skipping`
         );
 
-        // Tell RabbitMQ that this message has been handled.
         channel.ack(message);
 
         return;
@@ -76,8 +74,7 @@ async function startWorker() {
       /**
        * FIND INVENTORY
        *
-       * Every warehouse/product combination must already exist
-       * in our inventory table.
+       * Every warehouse/product combination must already exist.
        */
       const inventory = await prisma.inventory.findUnique({
         where: {
@@ -96,13 +93,6 @@ async function startWorker() {
 
       /**
        * CALCULATE NEW STOCK
-       *
-       * quantityDelta can be positive or negative.
-       *
-       * Example:
-       * physicalQuantity = 100
-       * quantityDelta    = +25
-       * new quantity     = 125
        */
       const newPhysicalQuantity =
         inventory.physicalQuantity + event.quantityDelta;
@@ -117,7 +107,7 @@ async function startWorker() {
       /**
        * ATOMIC DATABASE UPDATE
        *
-       * All of these operations succeed together or fail together:
+       * All operations succeed together or fail together:
        *
        * Inventory
        * InventoryCache
@@ -192,11 +182,9 @@ async function startWorker() {
       /**
        * ACK
        *
-       * Everything succeeded, so RabbitMQ can remove the message
-       * from the queue.
+       * Everything succeeded, so RabbitMQ can remove the message.
        */
       channel.ack(message);
-
     } catch (error) {
       console.error(
         "Inventory worker error:",
@@ -206,20 +194,55 @@ async function startWorker() {
       /**
        * NACK
        *
-       * We deliberately do NOT acknowledge failed messages.
+       * Do not acknowledge failed messages.
        *
-       * With the current configuration, false means:
-       * - don't requeue this message
-       *
-       * Later, when we configure a dead-letter/retry queue,
-       * failed events can be retried automatically instead.
+       * false = don't requeue.
+       * A dead-letter/retry queue can be added later.
        */
       channel.nack(message, false, false);
     }
   });
 }
 
-// Start the worker and report startup failures.
+/**
+ * RENDER HEALTH SERVER
+ *
+ * Render Free Web Services expect an HTTP server.
+ *
+ * This tiny server exists only so Render can monitor the worker.
+ * The actual work is still performed by RabbitMQ + this worker.
+ */
+const PORT = Number(process.env.PORT) || 10000;
+
+const healthServer = http.createServer((req, res) => {
+  if (req.url === "/health") {
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+    });
+
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        worker: "inventory",
+      })
+    );
+
+    return;
+  }
+
+  res.writeHead(404);
+  res.end("Not Found");
+});
+
+healthServer.listen(PORT, "0.0.0.0", () => {
+  console.log(
+    `Worker health server listening on port ${PORT}`
+  );
+});
+
+/**
+ * START WORKER
+ */
 startWorker().catch((error) => {
   console.error(
     "Worker failed to start:",
