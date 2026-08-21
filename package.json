@@ -1,20 +1,13 @@
 {
-  "dependencies": {
-    "@prisma/client": "^7.9.1",
-    "amqplib": "^2.0.1",
-    "dotenv": "^17.4.2",
-    "next": "^16.3.1",
-    "prisma": "^7.9.1",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
-  },
-  "devDependencies": {
-    "@types/node": "^26.2.0",
-    "tsx": "^4.23.12",
-    "typescript": "^7.0.2"
-  },
-  "allowScripts": {
-    "@prisma/engines@7.9.1": true,
-    "prisma@7.9.1": true
+  "name": "northstar-retail",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=warehouse",
+    "dev": "npm run dev --workspace=warehouse",
+    "start": "npm run start --workspace=warehouse"
   }
 }
